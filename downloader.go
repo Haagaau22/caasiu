@@ -42,8 +42,9 @@ func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) stri
 	return path.Join(dirpath, filename)
 }
 
-func (d *Downloader) calcDownloadedSizeList() []int {
+func (d *Downloader) calcDownloadedSize() ([]int, int) {
 	downloadedSizeList := make([]int, d.concurrencyN)
+	totalDownloadSize := 0
 	for i := 0; i < d.concurrencyN; i++ {
 		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
 
@@ -52,11 +53,13 @@ func (d *Downloader) calcDownloadedSizeList() []int {
 		} else {
 			downloadedSizeList[i] = int(fileInfo.Size())
 		}
+		totalDownloadSize += downloadedSizeList[i]
 	}
-	return downloadedSizeList
+	return downloadedSizeList, totalDownloadSize
 }
 
 func (d *Downloader) Download() {
+	log.Printf("url: %v\n", d.url)
 
 	//  request header
 	req, err := http.NewRequest(http.MethodHead, d.url, nil)
@@ -69,6 +72,7 @@ func (d *Downloader) Download() {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
+	log.Println("finish heading")
 
 	// set the max size
 	d.contentLength = resp.ContentLength
@@ -104,12 +108,10 @@ func (d *Downloader) Download() {
 		}),
 	)
 
-	downloadedSizeList := d.calcDownloadedSizeList()
-	log.Println(downloadedSizeList)
-	for _, downloadSize := range downloadedSizeList {
-		d.bar.Add(downloadSize)
+	downloadedSizeList, totalDownloadSize := d.calcDownloadedSize()
+	if err := d.bar.Set(totalDownloadSize); err != nil {
+		log.Fatal(err)
 	}
-	log.Printf("url: %v\nfilepath: %v\nconcurrencyN: %v", d.url, d.filepath, d.concurrencyN)
 
 	// set partSize
 	var wg sync.WaitGroup
@@ -119,10 +121,17 @@ func (d *Downloader) Download() {
 	// download
 	for i := 0; i < d.concurrencyN; i++ {
 		rangeStart := i*partSize + downloadedSizeList[i]
-		rangeEnd := rangeStart + partSize - 1
+		rangeEnd := i*partSize + partSize - 1
 		if i == d.concurrencyN-1 {
 			rangeEnd = int(d.contentLength)
 		}
+		if rangeStart >= rangeEnd {
+			wg.Done()
+			log.Println("goroutine ", i, "has ready finished")
+			continue
+		}
+		log.Println("goroutine ", i, "fetch", rangeStart, "->", rangeEnd)
+
 		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
 
 		go func() {
@@ -140,6 +149,7 @@ func (d *Downloader) Download() {
 	}
 	wg.Wait()
 	d.merge()
+	log.Println("finished!")
 
 }
 
@@ -166,6 +176,7 @@ func (d *Downloader) download(req *http.Request, filepath string) {
 }
 
 func (d *Downloader) merge() {
+	log.Printf("merging %d files to %s", d.concurrencyN, d.filepath)
 	dstFile, err := os.OpenFile(d.filepath, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
