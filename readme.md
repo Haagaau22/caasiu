@@ -2,8 +2,7 @@
 just for practicing golang
 
 - [x] concurrent download
-- [ ] multi-file download
-- [ ] multi-file progressbar
+- [x] download through proxy
 - [ ] resume downloading
 - [ ] bt download
 - [ ] web server

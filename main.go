@@ -3,12 +3,30 @@ package main
 import (
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"runtime"
 
 	"github.com/urfave/cli/v2"
 )
+
+func generateClient(proxy string) *http.Client {
+	if proxy == "" {
+		return &http.Client{}
+	}
+
+	proxyUrl, err := url.Parse(proxy)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyUrl),
+		},
+	}
+
+}
 
 func main() {
 
@@ -23,15 +41,20 @@ func main() {
 				Required: true,
 			},
 			&cli.StringFlag{
-				Name:    "output dirname/filename",
+				Name:    "output",
 				Aliases: []string{"o"},
 				Usage:   "Output `filename/dirname`",
 			},
+			&cli.StringFlag{
+				Name:    "proxy",
+				Aliases: []string{"p"},
+				Usage:   "proxy url`",
+			},
 			&cli.IntFlag{
-				Name:    "concurrency, default: the number of cpus",
+				Name:    "concurrency",
 				Aliases: []string{"n"},
 				Value:   runtime.NumCPU(),
-				Usage:   "Concurrency `number`",
+				Usage:   "Concurrency `number`, default: the number of cpus",
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -40,7 +63,7 @@ func main() {
 				concurrencyN: c.Int("concurrency"),
 				url:          c.String("url"),
 				filename:     c.String("output"),
-				client:       &http.Client{},
+				client:       generateClient(c.String("proxy")),
 			}
 
 			if downloader.filename == "" {
