@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strings"
 	"sync"
 
 	"github.com/k0kubun/go-ansi"
@@ -31,7 +32,7 @@ func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) stri
 		isDir = true
 	}
 
-	filename := path.Base(d.url)
+	filename := strings.Split(path.Base(d.url), "?")[0]
 	if headerFilename != "" {
 		filename = headerFilename
 	}
