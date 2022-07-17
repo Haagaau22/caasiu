@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
+	"path"
 	"sync"
 
 	"github.com/k0kubun/go-ansi"
@@ -15,15 +17,47 @@ import (
 type Downloader struct {
 	url           string
 	concurrencyN  int
-	filename      string
+	filepath      string
 	client        *http.Client
 	contentLength int64
 	bar           *progressbar.ProgressBar
 }
 
+func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) string {
+	dirpath := ""
+	isDir := false
+	if file, err := os.Stat(inputFilepath); err == nil && file.IsDir() {
+		dirpath = inputFilepath
+		isDir = true
+	}
+
+	filename := path.Base(d.url)
+	if headerFilename != "" {
+		filename = headerFilename
+	}
+	if !isDir && inputFilepath != "" {
+		filename = inputFilepath
+	}
+	return path.Join(dirpath, filename)
+}
+
+func (d *Downloader) calcDownloadedSizeList() []int {
+	downloadedSizeList := make([]int, d.concurrencyN)
+	for i := 0; i < d.concurrencyN; i++ {
+		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
+
+		if fileInfo, err := os.Stat(filepath); err != nil {
+			downloadedSizeList[i] = 0
+		} else {
+			downloadedSizeList[i] = int(fileInfo.Size())
+		}
+	}
+	return downloadedSizeList
+}
+
 func (d *Downloader) Download() {
 
-	// check header
+	//  request header
 	req, err := http.NewRequest(http.MethodHead, d.url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -35,8 +69,22 @@ func (d *Downloader) Download() {
 	}
 	defer resp.Body.Close()
 
+	// set the max size
 	d.contentLength = resp.ContentLength
+
+	// set the number of concurrency
 	acceptRanges := resp.Header.Get("Accept-Ranges")
+	if acceptRanges != "bytes" {
+		d.concurrencyN = 1
+		log.Printf("%v, partial request is not supported, reset concurrencyN=1", d.url)
+	}
+
+	// set filepath
+	headerFilename := ""
+	if _, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil {
+		headerFilename = params["filename"]
+	}
+	d.filepath = d.generateFilepath(d.filepath, headerFilename)
 
 	// set progressbar
 	d.bar = progressbar.NewOptions(
@@ -55,25 +103,26 @@ func (d *Downloader) Download() {
 		}),
 	)
 
-	if acceptRanges != "bytes" {
-		d.concurrencyN = 1
-		log.Printf("%v, partial request is not supported, reset concurrencyN=1", d.url)
+	downloadedSizeList := d.calcDownloadedSizeList()
+	log.Println(downloadedSizeList)
+	for _, downloadSize := range downloadedSizeList {
+		d.bar.Add(downloadSize)
 	}
+	log.Printf("url: %v\nfilepath: %v\nconcurrencyN: %v", d.url, d.filepath, d.concurrencyN)
 
-	// set concurrencyN and partSize
+	// set partSize
 	var wg sync.WaitGroup
 	wg.Add(d.concurrencyN)
 	partSize := int(d.contentLength) / d.concurrencyN
-	// log.Printf("downloader: %v", d)
 
 	// download
 	for i := 0; i < d.concurrencyN; i++ {
-		rangeStart := i * partSize
+		rangeStart := i*partSize + downloadedSizeList[i]
 		rangeEnd := rangeStart + partSize - 1
 		if i == d.concurrencyN-1 {
 			rangeEnd = int(d.contentLength)
 		}
-		filename := fmt.Sprintf("%v-%v", d.filename, i)
+		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
 
 		go func() {
 			defer wg.Done()
@@ -84,7 +133,7 @@ func (d *Downloader) Download() {
 			}
 			downloadReq.Header.Set("Range", fmt.Sprintf("bytes=%v-%v", rangeStart, rangeEnd))
 
-			d.download(downloadReq, filename)
+			d.download(downloadReq, filepath)
 
 		}()
 	}
@@ -93,15 +142,15 @@ func (d *Downloader) Download() {
 
 }
 
-func (d *Downloader) download(req *http.Request, filename string) {
-	// log.Printf("start downloading, range: %v, filename: %v\n", req.Header.Get("Range"), filename)
+func (d *Downloader) download(req *http.Request, filepath string) {
+	// log.Printf("start downloading, range: %v, filepath: %v\n", req.Header.Get("Range"), filepath)
 	resp, err := d.client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
 
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0666)
+	file, err := os.OpenFile(filepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -111,20 +160,20 @@ func (d *Downloader) download(req *http.Request, filename string) {
 	if _, err := io.CopyBuffer(io.MultiWriter(file, d.bar), resp.Body, buf); err != nil && err != io.EOF {
 		log.Fatal(err)
 	}
-	// log.Println("finish downloading", filename)
+	// log.Println("finish downloading", filepath)
 
 }
 
 func (d *Downloader) merge() {
-	dstFile, err := os.OpenFile(d.filename, os.O_CREATE|os.O_WRONLY, 0666)
+	dstFile, err := os.OpenFile(d.filepath, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer dstFile.Close()
 
 	for i := 0; i < d.concurrencyN; i++ {
-		srcFilename := fmt.Sprintf("%v-%v", d.filename, i)
-		srcFile, err := os.Open(srcFilename)
+		srcFilepath := fmt.Sprintf("%v-%v", d.filepath, i)
+		srcFile, err := os.Open(srcFilepath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -135,7 +184,7 @@ func (d *Downloader) merge() {
 		}
 		srcFile.Close()
 
-		os.Remove(srcFilename)
+		os.Remove(srcFilepath)
 
 	}
 }

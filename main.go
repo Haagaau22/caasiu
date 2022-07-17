@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"runtime"
 
 	"github.com/urfave/cli/v2"
@@ -43,7 +42,7 @@ func main() {
 			&cli.StringFlag{
 				Name:    "output",
 				Aliases: []string{"o"},
-				Usage:   "Output `filename/dirname`",
+				Usage:   "Output `filepath/dirpath`",
 			},
 			&cli.StringFlag{
 				Name:    "proxy",
@@ -62,17 +61,10 @@ func main() {
 			downloader := &Downloader{
 				concurrencyN: c.Int("concurrency"),
 				url:          c.String("url"),
-				filename:     c.String("output"),
+				filepath:     c.String("output"),
 				client:       generateClient(c.String("proxy")),
 			}
 
-			if downloader.filename == "" {
-				downloader.filename = path.Base(downloader.url)
-			} else if file, err := os.Stat(downloader.filename); err == nil && file.IsDir() {
-				downloader.filename = path.Join(downloader.filename, path.Base(downloader.url))
-			}
-
-			log.Printf("url: %v\nfilename: %v\nconcurrencyN: %v", downloader.url, downloader.filename, downloader.concurrencyN)
 			downloader.Download()
 			return nil
 		},
