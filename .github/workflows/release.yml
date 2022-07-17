@@ -9,12 +9,9 @@ jobs:
     name: Release on GitHub
     runs-on: ubuntu-latest
     steps:
+    - run: git config --global --add safe.directory $(realpath .)
     - name: Check out code
       uses: actions/checkout@v2
-    
-    - run: git init
-    - name: show git status
-      run : git status
 
     - name: Validates GO releaser config
       uses: docker://goreleaser/goreleaser:latest
