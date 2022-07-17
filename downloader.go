@@ -1,27 +1,27 @@
 package main
 
 import (
-	"io"
-	"os"
-	"log"
 	"fmt"
-	"sync"
+	"io"
+	"log"
 	"net/http"
+	"os"
+	"sync"
+
 	"github.com/k0kubun/go-ansi"
 	"github.com/schollz/progressbar/v3"
 )
 
 type Downloader struct {
-	url string
-	concurrencyN int
-	filename string
-	client *http.Client
+	url           string
+	concurrencyN  int
+	filename      string
+	client        *http.Client
 	contentLength int64
-	bar *progressbar.ProgressBar
+	bar           *progressbar.ProgressBar
 }
 
-
-func (d *Downloader) Download(){
+func (d *Downloader) Download() {
 
 	// check header
 	req, err := http.NewRequest(http.MethodHead, d.url, nil)
@@ -55,9 +55,6 @@ func (d *Downloader) Download(){
 		}),
 	)
 
-
-
-
 	if acceptRanges != "bytes" {
 		d.concurrencyN = 1
 		log.Printf("%v, partial request is not supported, reset concurrencyN=1", d.url)
@@ -66,14 +63,14 @@ func (d *Downloader) Download(){
 	// set concurrencyN and partSize
 	var wg sync.WaitGroup
 	wg.Add(d.concurrencyN)
-	partSize  := int(d.contentLength) / d.concurrencyN
+	partSize := int(d.contentLength) / d.concurrencyN
 	// log.Printf("downloader: %v", d)
 
 	// download
-	for i:=0; i < d.concurrencyN; i++ {
-		rangeStart := i*partSize
+	for i := 0; i < d.concurrencyN; i++ {
+		rangeStart := i * partSize
 		rangeEnd := rangeStart + partSize - 1
-		if i == d.concurrencyN -1 {
+		if i == d.concurrencyN-1 {
 			rangeEnd = int(d.contentLength)
 		}
 		filename := fmt.Sprintf("%v-%v", d.filename, i)
@@ -94,11 +91,9 @@ func (d *Downloader) Download(){
 	wg.Wait()
 	d.merge()
 
-
 }
 
-
-func (d *Downloader)download(req *http.Request, filename string){
+func (d *Downloader) download(req *http.Request, filename string) {
 	// log.Printf("start downloading, range: %v, filename: %v\n", req.Header.Get("Range"), filename)
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -106,8 +101,7 @@ func (d *Downloader)download(req *http.Request, filename string){
 	}
 	defer resp.Body.Close()
 
-
-	file, err := os.OpenFile(filename, os.O_CREATE | os.O_WRONLY, 0666)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -120,7 +114,6 @@ func (d *Downloader)download(req *http.Request, filename string){
 	// log.Println("finish downloading", filename)
 
 }
-
 
 func (d *Downloader) merge() {
 	dstFile, err := os.OpenFile(d.filename, os.O_CREATE|os.O_WRONLY, 0666)
@@ -146,4 +139,3 @@ func (d *Downloader) merge() {
 
 	}
 }
-
