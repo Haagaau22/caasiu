@@ -14,7 +14,7 @@ jobs:
     
     - run: git init
     - name: show git status
-    - run : git status
+      run : git status
 
     - name: Validates GO releaser config
       uses: docker://goreleaser/goreleaser:latest
