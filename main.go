@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -47,7 +48,13 @@ func main() {
 			&cli.StringFlag{
 				Name:    "proxy",
 				Aliases: []string{"p"},
-				Usage:   "proxy url`",
+				Usage:   "proxy url",
+			},
+			&cli.BoolFlag{
+				Name:    "verbose",
+				Aliases: []string{"v"},
+				Value:   false,
+				Usage:   "log to console",
 			},
 			&cli.IntFlag{
 				Name:    "concurrency",
@@ -63,6 +70,9 @@ func main() {
 				url:          c.String("url"),
 				filepath:     c.String("output"),
 				client:       generateClient(c.String("proxy")),
+			}
+			if !c.Bool("verbose") {
+				log.SetOutput(ioutil.Discard)
 			}
 
 			downloader.Download()
