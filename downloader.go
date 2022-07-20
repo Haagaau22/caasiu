@@ -26,7 +26,7 @@ type Downloader struct {
 }
 
 
-type WriterTask struct {
+type MergeTask struct {
 	rangeStart int
 	// buf []byte
 	buf bytes.Buffer
@@ -69,7 +69,7 @@ func (d *Downloader) calcDownloadedSize() ([]int, int) {
 func (d *Downloader) Download() {
 	log.Printf("url: %v\n", d.url)
 
-	//  request header
+	//  send heading
 	req, err := http.NewRequest(http.MethodHead, d.url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -129,7 +129,7 @@ func (d *Downloader) Download() {
 	writerWg.Add(1)
 	partSize := int(d.contentLength) / d.concurrencyN
 
-	writerQueue := make(chan WriterTask)
+	mergeQueue := make(chan MergeTask)
 	// download
 	for i := 0; i < d.concurrencyN; i++ {
 		rangeStart := i*partSize + downloadedSizeList[i]
@@ -138,13 +138,12 @@ func (d *Downloader) Download() {
 			rangeEnd = int(d.contentLength)
 		}
 
-		go httpDownload(d.client, d.url, rangeStart, rangeEnd, writerQueue, &downloaderWg, d.bar)
+		go httpDownload(d.client, d.url, rangeStart, rangeEnd, mergeQueue, &downloaderWg, d.bar)
 	}
 
-	go merge(writerQueue, d.filepath, &writerWg)
+	go merge(mergeQueue, d.filepath, &writerWg)
 	downloaderWg.Wait()
-	close(writerQueue)
-	log.Println("close writerQueue")
+	close(mergeQueue)
 
 	writerWg.Wait()
 	log.Println("finished!")
@@ -157,7 +156,7 @@ func httpDownload(
 	client *http.Client, 
 	url string, 
 	rangeStart, rangeEnd int, 
-	writerQueue chan WriterTask,
+	mergeQueue chan MergeTask,
 	wg *sync.WaitGroup, 
 	bar *progressbar.ProgressBar) {
 	log.Printf("start downloading, rangeStart: %d, rangeEnd: %d\n", rangeStart, rangeEnd)
@@ -183,21 +182,19 @@ func httpDownload(
 	}
 
 
-	writerQueue <- WriterTask{buf: buf, rangeStart: rangeStart}
+	mergeQueue <- MergeTask{buf: buf, rangeStart: rangeStart}
 }
 
 
 
-func merge(writerQueue chan WriterTask, filepath string, wg *sync.WaitGroup) {
+func merge(mergeQueue chan MergeTask, filepath string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	file, err := os.Create(filepath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for task := range writerQueue {
-		// log.Println("merging\t", task.rangeStart)
-
+	for task := range mergeQueue {
 		if _, err := file.WriteAt(task.buf.Bytes(), int64(task.rangeStart)); err != nil {
 			log.Fatal(err)
 		}
