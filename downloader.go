@@ -10,6 +10,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"bytes"
 
 	"github.com/k0kubun/go-ansi"
 	"github.com/schollz/progressbar/v3"
@@ -25,10 +26,10 @@ type Downloader struct {
 }
 
 
-type Task struct {
-	partFilepath string
+type WriterTask struct {
 	rangeStart int
-	rangeEnd int
+	// buf []byte
+	buf bytes.Buffer
 }
 
 func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) string {
@@ -124,11 +125,11 @@ func (d *Downloader) Download() {
 	var downloaderWg sync.WaitGroup
 	downloaderWg.Add(d.concurrencyN)
 
-	var resultWg sync.WaitGroup
-	resultWg.Add(1)
+	var writerWg sync.WaitGroup
+	writerWg.Add(1)
 	partSize := int(d.contentLength) / d.concurrencyN
 
-	writerQueue := make(chan Task)
+	writerQueue := make(chan WriterTask)
 	// download
 	for i := 0; i < d.concurrencyN; i++ {
 		rangeStart := i*partSize + downloadedSizeList[i]
@@ -136,113 +137,70 @@ func (d *Downloader) Download() {
 		if i == d.concurrencyN-1 {
 			rangeEnd = int(d.contentLength)
 		}
-		if rangeStart >= rangeEnd {
-			downloaderWg.Done()
-			log.Println("goroutine ", i, "has ready finished")
-			continue
-		}
-		log.Println("goroutine ", i, "fetch", rangeStart, "->", rangeEnd)
 
-		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
-
-		go func() {
-			defer downloaderWg.Done()
-
-			downloadReq, err := http.NewRequest(http.MethodGet, d.url, nil)
-			if err != nil {
-				log.Fatal(err)
-			}
-			downloadReq.Header.Set("Range", fmt.Sprintf("bytes=%v-%v", rangeStart, rangeEnd))
-
-			d.download(downloadReq, filepath)
-			writerQueue <- Task{
-				partFilepath: filepath,
-				rangeStart: rangeStart,
-				rangeEnd: rangeEnd,
-			}
-
-		}()
+		go httpDownload(d.client, d.url, rangeStart, rangeEnd, writerQueue, &downloaderWg, d.bar)
 	}
 
-	go fastMerge(writerQueue, d.filepath, &resultWg)
+	go merge(writerQueue, d.filepath, &writerWg)
 	downloaderWg.Wait()
 	close(writerQueue)
 	log.Println("close writerQueue")
-	resultWg.Wait()
-	// d.merge()
+
+	writerWg.Wait()
 	log.Println("finished!")
 
 }
 
-func (d *Downloader) download(req *http.Request, filepath string) {
-	// log.Printf("start downloading, range: %v, filepath: %v\n", req.Header.Get("Range"), filepath)
-	resp, err := d.client.Do(req)
+
+
+func httpDownload(
+	client *http.Client, 
+	url string, 
+	rangeStart, rangeEnd int, 
+	writerQueue chan WriterTask,
+	wg *sync.WaitGroup, 
+	bar *progressbar.ProgressBar) {
+	log.Printf("start downloading, rangeStart: %d, rangeEnd: %d\n", rangeStart, rangeEnd)
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%v-%v", rangeStart, rangeEnd))
+
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
+	defer wg.Done()
 
-	file, err := os.OpenFile(filepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
-	if err != nil {
+	var buf bytes.Buffer
+
+	copyBuf := make([]byte, 128*1024)
+	if _, err := io.CopyBuffer(io.MultiWriter(&buf, bar), resp.Body, copyBuf); err != nil && err != io.EOF {
 		log.Fatal(err)
 	}
-	defer file.Close()
 
-	buf := make([]byte, 128*1024)
-	if _, err := io.CopyBuffer(io.MultiWriter(file, d.bar), resp.Body, buf); err != nil && err != io.EOF {
-		log.Fatal(err)
-	}
-	// log.Println("finish downloading", filepath)
 
+	writerQueue <- WriterTask{buf: buf, rangeStart: rangeStart}
 }
 
-func (d *Downloader) merge() {
-	log.Printf("merging %d files to %s", d.concurrencyN, d.filepath)
-	dstFile, err := os.OpenFile(d.filepath, os.O_CREATE|os.O_WRONLY, 0666)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer dstFile.Close()
 
-	for i := 0; i < d.concurrencyN; i++ {
-		srcFilepath := fmt.Sprintf("%v-%v", d.filepath, i)
-		srcFile, err := os.Open(srcFilepath)
-		if err != nil {
-			log.Fatal(err)
-		}
 
-		buf := make([]byte, 128*1024)
-		if _, err := io.CopyBuffer(dstFile, srcFile, buf); err != nil && err != io.EOF {
-			log.Fatal(err)
-		}
-		srcFile.Close()
-
-		os.Remove(srcFilepath)
-
-	}
-}
-
-func fastMerge(writerQueue chan Task, filepath string, resultWg *sync.WaitGroup) {
-	defer resultWg.Done()
+func merge(writerQueue chan WriterTask, filepath string, wg *sync.WaitGroup) {
+	defer wg.Done()
 	file, err := os.Create(filepath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	for task := range writerQueue {
-		log.Println(task)
-		
-		buf, err := os.ReadFile(task.partFilepath)
-		if err != nil {
+		// log.Println("merging\t", task.rangeStart)
+
+		if _, err := file.WriteAt(task.buf.Bytes(), int64(task.rangeStart)); err != nil {
 			log.Fatal(err)
 		}
 
-		if _, err := file.WriteAt(buf, int64(task.rangeStart)); err != nil {
-			log.Fatal(err)
-		}
-
-		if err := os.Remove(task.partFilepath); err != nil {
-			log.Fatal(err)
-		}
 	}
 }
