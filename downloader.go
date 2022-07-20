@@ -24,6 +24,13 @@ type Downloader struct {
 	bar           *progressbar.ProgressBar
 }
 
+
+type Task struct {
+	partFilepath string
+	rangeStart int
+	rangeEnd int
+}
+
 func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) string {
 	dirpath := ""
 	isDir := false
@@ -114,10 +121,14 @@ func (d *Downloader) Download() {
 	}
 
 	// set partSize
-	var wg sync.WaitGroup
-	wg.Add(d.concurrencyN)
+	var downloaderWg sync.WaitGroup
+	downloaderWg.Add(d.concurrencyN)
+
+	var resultWg sync.WaitGroup
+	resultWg.Add(1)
 	partSize := int(d.contentLength) / d.concurrencyN
 
+	writerQueue := make(chan Task)
 	// download
 	for i := 0; i < d.concurrencyN; i++ {
 		rangeStart := i*partSize + downloadedSizeList[i]
@@ -126,7 +137,7 @@ func (d *Downloader) Download() {
 			rangeEnd = int(d.contentLength)
 		}
 		if rangeStart >= rangeEnd {
-			wg.Done()
+			downloaderWg.Done()
 			log.Println("goroutine ", i, "has ready finished")
 			continue
 		}
@@ -135,7 +146,7 @@ func (d *Downloader) Download() {
 		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
 
 		go func() {
-			defer wg.Done()
+			defer downloaderWg.Done()
 
 			downloadReq, err := http.NewRequest(http.MethodGet, d.url, nil)
 			if err != nil {
@@ -144,11 +155,21 @@ func (d *Downloader) Download() {
 			downloadReq.Header.Set("Range", fmt.Sprintf("bytes=%v-%v", rangeStart, rangeEnd))
 
 			d.download(downloadReq, filepath)
+			writerQueue <- Task{
+				partFilepath: filepath,
+				rangeStart: rangeStart,
+				rangeEnd: rangeEnd,
+			}
 
 		}()
 	}
-	wg.Wait()
-	d.merge()
+
+	go fastMerge(writerQueue, d.filepath, &resultWg)
+	downloaderWg.Wait()
+	close(writerQueue)
+	log.Println("close writerQueue")
+	resultWg.Wait()
+	// d.merge()
 	log.Println("finished!")
 
 }
@@ -198,5 +219,30 @@ func (d *Downloader) merge() {
 
 		os.Remove(srcFilepath)
 
+	}
+}
+
+func fastMerge(writerQueue chan Task, filepath string, resultWg *sync.WaitGroup) {
+	defer resultWg.Done()
+	file, err := os.Create(filepath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for task := range writerQueue {
+		log.Println(task)
+		
+		buf, err := os.ReadFile(task.partFilepath)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if _, err := file.WriteAt(buf, int64(task.rangeStart)); err != nil {
+			log.Fatal(err)
+		}
+
+		if err := os.Remove(task.partFilepath); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
