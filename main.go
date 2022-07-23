@@ -62,6 +62,12 @@ func main() {
 				Value:   runtime.NumCPU(),
 				Usage:   "Concurrency `number`, default: the number of cpus",
 			},
+			&cli.IntFlag{
+				Name:    "blockSize",
+				Aliases: []string{"b"},
+				Value:   100 * 1024 * 1024,
+				Usage:   "block size, default: 100M",
+			},
 		},
 		Action: func(c *cli.Context) error {
 
@@ -69,6 +75,7 @@ func main() {
 				concurrencyN: c.Int("concurrency"),
 				url:          c.String("url"),
 				filepath:     c.String("output"),
+				blockSize:    c.String("blockSize"),
 				client:       generateClient(c.String("proxy")),
 			}
 			if !c.Bool("verbose") {

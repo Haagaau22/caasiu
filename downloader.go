@@ -18,6 +18,7 @@ import (
 
 type Downloader struct {
 	url           string
+	blockSize     int
 	concurrencyN  int
 	filepath      string
 	client        *http.Client
