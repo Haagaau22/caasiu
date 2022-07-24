@@ -75,9 +75,11 @@ func main() {
 				concurrencyN: c.Int("concurrency"),
 				url:          c.String("url"),
 				filepath:     c.String("output"),
-				blockSize:    c.String("blockSize"),
+				blockSize:    c.Int("blockSize"),
 				client:       generateClient(c.String("proxy")),
 			}
+
+			log.SetFlags(log.LstdFlags | log.Lshortfile)
 			if !c.Bool("verbose") {
 				log.SetOutput(ioutil.Discard)
 			}

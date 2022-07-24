@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,8 +23,13 @@ type Downloader struct {
 	concurrencyN  int
 	filepath      string
 	client        *http.Client
-	contentLength int64
+	contentLength int
 	bar           *progressbar.ProgressBar
+}
+
+type Task struct {
+	rangeStart int
+	rangeEnd int
 }
 
 func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) string {
@@ -44,20 +50,74 @@ func (d *Downloader) generateFilepath(inputFilepath, headerFilename string) stri
 	return path.Join(dirpath, filename)
 }
 
-func (d *Downloader) calcDownloadedSize() ([]int, int) {
-	downloadedSizeList := make([]int, d.concurrencyN)
-	totalDownloadSize := 0
-	for i := 0; i < d.concurrencyN; i++ {
-		filepath := fmt.Sprintf("%v-%v", d.filepath, i)
 
-		if fileInfo, err := os.Stat(filepath); err != nil {
-			downloadedSizeList[i] = 0
-		} else {
-			downloadedSizeList[i] = int(fileInfo.Size())
-		}
-		totalDownloadSize += downloadedSizeList[i]
+func checkBlock(file *os.File, rangeStart, rangeEnd int) bool {
+
+	if file == nil {
+		return false
 	}
-	return downloadedSizeList, totalDownloadSize
+
+	bufLen := 32
+	if (rangeEnd - rangeStart) / 10 < bufLen {
+		bufLen = int((rangeEnd - rangeStart) / 10)
+	} 
+	buf := make([]byte, bufLen)
+
+	if _, err := file.ReadAt(buf, int64(rangeEnd - bufLen)); errors.Is(err, io.EOF) {
+		return false
+	}else if  err != nil {
+		log.Fatal(err)
+	}
+	for i := bufLen-1; i>0; i--{
+		if buf[i] != byte(0){
+			return true
+		}
+	}
+	return false
+}
+
+
+func generateTasks(
+	filepath string, 
+	blockSize, maxSize int, 
+	bar *progressbar.ProgressBar) []Task{
+
+	var file *os.File
+
+	if _, err := os.Stat(filepath); err == nil {
+		file, err = os.Open(filepath)
+		log.Printf("load old file")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+
+
+	var taskList []Task
+
+	rangeStart := 0
+	rangeEnd := blockSize - 1
+	for rangeStart < maxSize - 1 {
+		if rangeEnd >= maxSize - 1 {
+			rangeEnd = maxSize - 1
+		}
+
+		hasDownloadBlock := checkBlock(file, rangeStart, rangeEnd)
+		log.Printf(
+			"block, hasDownload: %v, rangeStart: %d, rangeEnd: %d", 
+			hasDownloadBlock, rangeStart, rangeEnd)
+
+		if !hasDownloadBlock {
+			taskList = append(taskList, Task{rangeStart:rangeStart, rangeEnd:rangeEnd})
+		}else if err := bar.Add(rangeEnd-rangeStart); err != nil {
+			log.Fatal(err)
+		} 
+
+		rangeStart = rangeEnd + 1
+		rangeEnd = rangeStart + blockSize - 1
+	}
+	return taskList
 }
 
 func (d *Downloader) Download() {
@@ -77,7 +137,7 @@ func (d *Downloader) Download() {
 	log.Println("finish heading")
 
 	// set the max size
-	d.contentLength = resp.ContentLength
+	d.contentLength = int(resp.ContentLength)
 
 	// set the number of concurrency
 	acceptRanges := resp.Header.Get("Accept-Ranges")
@@ -93,9 +153,11 @@ func (d *Downloader) Download() {
 	}
 	d.filepath = d.generateFilepath(d.filepath, headerFilename)
 
+	log.Printf("filepath: %s", d.filepath)
+
 	// set progressbar
 	d.bar = progressbar.NewOptions(
-		int(d.contentLength),
+		d.contentLength,
 		progressbar.OptionSetWriter(ansi.NewAnsiStdout()),
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionShowBytes(true),
@@ -110,36 +172,36 @@ func (d *Downloader) Download() {
 		}),
 	)
 
-	downloadedSizeList, totalDownloadSize := d.calcDownloadedSize()
-	if err := d.bar.Set(totalDownloadSize); err != nil {
-		log.Fatal(err)
-	}
+	var wg sync.WaitGroup
 
-	// set partSize
-	var downloaderWg sync.WaitGroup
-	downloaderWg.Add(d.concurrencyN)
 
-	var writerWg sync.WaitGroup
-	writerWg.Add(1)
-	partSize := int(d.contentLength) / d.concurrencyN
+	concurrencyController := make(chan struct{}, d.concurrencyN)
 
-	file, err := os.Create(d.filepath)
+	taskList := generateTasks(d.filepath, d.blockSize, d.contentLength, d.bar)
+
+	file, err := os.OpenFile(d.filepath, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// download
-	for i := 0; i < d.concurrencyN; i++ {
-		rangeStart := i*partSize + downloadedSizeList[i]
-		rangeEnd := i*partSize + partSize - 1
-		if i == d.concurrencyN-1 {
-			rangeEnd = int(d.contentLength)
-		}
+	for _, task := range taskList {
+		wg.Add(1)
+		concurrencyController <- struct{}{}
+		log.Printf("add task: %v -> %v", task.rangeStart, task.rangeEnd)
 
-		go httpDownload(d.client, d.url, rangeStart, rangeEnd, &downloaderWg, file, d.bar)
+		go httpDownload(
+			d.client, 
+			d.url, 
+			task.rangeStart, 
+			task.rangeEnd, 
+			concurrencyController,
+			&wg, 
+			file, 
+			d.bar)
 	}
 
-	downloaderWg.Wait()
+
+	wg.Wait()
 	log.Println("finished!")
 }
 
@@ -147,6 +209,7 @@ func httpDownload(
 	client *http.Client,
 	url string,
 	rangeStart, rangeEnd int,
+	concurrencyController chan struct{},
 	wg *sync.WaitGroup,
 	file *os.File,
 	bar *progressbar.ProgressBar) {
@@ -174,5 +237,7 @@ func httpDownload(
 	if _, err := file.WriteAt(buf.Bytes(), int64(rangeStart)); err != nil {
 		log.Fatal(err)
 	}
+	<- concurrencyController
+	log.Printf("finish downloaded block, rangeStart: %d, rangeEnd: %d", rangeStart, rangeEnd)
 
 }
