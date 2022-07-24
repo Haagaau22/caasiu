@@ -162,7 +162,7 @@ func (d *Downloader) Download() {
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionFullWidth(),
-		progressbar.OptionSetDescription("downloading..."),
+		progressbar.OptionSetDescription(path.Base(d.filepath)),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "[green]=[reset]",
 			SaucerHead:    "[green]>[reset]",
