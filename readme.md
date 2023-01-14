@@ -14,3 +14,6 @@ just for practicing golang
 // windows
 caasiu.exe  -u https://github.com/Zonzely/caasiu/releases/download/v0.1.5/caasiu_0.1.5_windows_amd64.tar.gz  -p socks5://127.0.0.1:10808 -v
 ```
+
+### batch download
+[![asciicast](https://asciinema.org/a/51D1CrI4uHYkNaD7FUvjBdy4v.svg)](https://asciinema.org/a/51D1CrI4uHYkNaD7FUvjBdy4v)
