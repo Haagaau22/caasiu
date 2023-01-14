@@ -38,7 +38,6 @@ func main() {
 				Name:     "url",
 				Aliases:  []string{"u"},
 				Usage:    "`URL` to download",
-				Required: true,
 			},
 			&cli.StringFlag{
 				Name:    "output",
@@ -70,10 +69,14 @@ func main() {
 			},
 		},
 		Action: func(c *cli.Context) error {
+			url := c.Args().Get(0)
+			if "" !=  c.String("url"){
+				url = c.String("url")
+			}
 
 			downloader := &Downloader{
 				concurrencyN: c.Int("concurrency"),
-				url:          c.String("url"),
+				url:          url,
 				filepath:     c.String("output"),
 				blockSize:    c.Int("blockSize"),
 				client:       generateClient(c.String("proxy")),
@@ -83,6 +86,7 @@ func main() {
 			if !c.Bool("verbose") {
 				log.SetOutput(ioutil.Discard)
 			}
+
 
 			downloader.Download()
 			return nil
